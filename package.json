@@ -1,0 +1,14 @@
+{
+  "name": "dingtalk-robot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "report:usage": "node scripts/daily-sub2api-usage-to-dingtalk.mjs --local-output",
+    "notify:usage": "node scripts/daily-sub2api-usage-to-dingtalk.mjs",
+    "check": "node --check scripts/daily-sub2api-usage-to-dingtalk.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
