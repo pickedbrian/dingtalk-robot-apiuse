@@ -247,9 +247,9 @@ function buildReportText(stats, reportDate, cumulative) {
 
     ``,
     `------`,
-    ``,
     
     `- 累计已使用：${formatUsd(cumulative.totalActualCost)}`,
+    ``,
   ].join("\n");
 }
 
