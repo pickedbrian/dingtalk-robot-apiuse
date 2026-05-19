@@ -9,6 +9,9 @@ const localOutput = process.argv.includes("--local-output");
 const dryRun = process.argv.includes("--dry-run");
 const noStateWrite = process.argv.includes("--no-state-write");
 
+process.once("SIGINT", () => hardExit(130));
+process.once("SIGTERM", () => hardExit(143));
+
 let config;
 
 try {
@@ -20,17 +23,34 @@ try {
   const message = buildDingtalkMessage(reportText, buildReportTitle(startDate));
 
   if (localOutput) {
-    console.log(reportText);
+    await writeStdout(`${reportText}\n`);
   } else if (dryRun) {
-    console.log(JSON.stringify(message, null, 2));
+    await writeStdout(`${JSON.stringify(message, null, 2)}\n`);
   } else {
     await sendDingtalkMessage(message);
-    console.log(`Sent Sub2API usage report for ${startDate}.`);
+    await writeStdout(`Sent Sub2API usage report for ${startDate}.\n`);
   }
-  process.exit(0);
+  hardExit(0);
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  await writeStderr(`${error instanceof Error ? error.message : String(error)}\n`);
+  hardExit(1);
+}
+
+function writeStdout(text) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(text, (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function writeStderr(text) {
+  return new Promise((resolve, reject) => {
+    process.stderr.write(text, (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function hardExit(code) {
+  process.exitCode = code;
+  process.exit(code);
 }
 
 function readConfig() {
