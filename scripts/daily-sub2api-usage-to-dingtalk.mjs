@@ -27,9 +27,10 @@ try {
     await sendDingtalkMessage(message);
     console.log(`Sent Sub2API usage report for ${startDate}.`);
   }
+  process.exit(0);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+  process.exit(1);
 }
 
 function readConfig() {
@@ -48,6 +49,7 @@ function readConfig() {
     title: process.env.REPORT_TITLE || "Sub2API 昨日用量",
     cumulativeBaseActualCost: parseEnvNumber("CUMULATIVE_BASE_ACTUAL_COST", 2551),
     cumulativeStateFile: process.env.CUMULATIVE_STATE_FILE || "data/cumulative-actual-cost.json",
+    requestTimeoutMs: parseEnvNumber("REQUEST_TIMEOUT_MS", 30_000),
   };
 }
 
@@ -164,6 +166,7 @@ async function fetchSub2ApiUsageStats(startDate, endDate) {
 
   const response = await fetch(url, {
     headers: buildSub2ApiAuthHeaders(),
+    signal: AbortSignal.timeout(config.requestTimeoutMs),
   });
 
   const body = await readJsonResponse(response, "Sub2API usage stats");
@@ -366,6 +369,7 @@ async function sendDingtalkMessage(message) {
       Accept: "application/json",
     },
     body: JSON.stringify(message),
+    signal: AbortSignal.timeout(config.requestTimeoutMs),
   });
 
   const body = await readJsonResponse(response, "DingTalk webhook");
