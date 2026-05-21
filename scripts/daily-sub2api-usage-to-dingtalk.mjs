@@ -20,10 +20,15 @@ try {
   const { startDate, endDate } = getYesterdayRange(config.timeZone, todayDateOverride);
   const todayDate = endDate;
   const previousWeekRange = getPreviousWeekRange(todayDate);
+  const previousDayRange = getPreviousDayRange(startDate);
   const stats = await fetchSub2ApiUsageStats(startDate, endDate);
+  const previousDayStats = await fetchSub2ApiUsageStats(
+    previousDayRange.startDate,
+    previousDayRange.endDate,
+  );
   const dailyTopUsers = await fetchTopUserTokenConsumers(startDate, startDate, 3);
   const cumulative = updateCumulativeActualCost(startDate, toNumber(stats.total_actual_cost));
-  const reportText = buildReportText(stats, startDate, cumulative, dailyTopUsers);
+  const reportText = buildReportText(stats, startDate, cumulative, dailyTopUsers, previousDayStats);
   const message = buildDingtalkMessage(reportText, buildReportTitle(startDate));
   const weeklyMessage = isMonday(todayDate)
     ? await buildWeeklyRankingMessage(previousWeekRange)
@@ -79,7 +84,7 @@ function readConfig() {
     dingtalkWebhook: localOutput ? process.env.DINGTALK_WEBHOOK || "" : requiredEnv("DINGTALK_WEBHOOK"),
     dingtalkSecret: process.env.DINGTALK_SECRET || "",
     timeZone: process.env.REPORT_TIMEZONE || "Asia/Shanghai",
-    title: process.env.REPORT_TITLE || "Sub2API 昨日用量",
+    title: process.env.REPORT_TITLE || "昨日用量",
     cumulativeBaseActualCost: parseEnvNumber("CUMULATIVE_BASE_ACTUAL_COST", 2551),
     cumulativeStateFile: process.env.CUMULATIVE_STATE_FILE || "data/cumulative-actual-cost.json",
     requestTimeoutMs: parseEnvNumber("REQUEST_TIMEOUT_MS", 30_000),
@@ -183,6 +188,29 @@ function getPreviousWeekRange(todayDate) {
   };
 }
 
+function getPreviousDayRange(reportDate) {
+  const date = parseDateString(reportDate);
+  const day = new Date(Date.UTC(date.year, date.month - 1, date.day));
+
+  return {
+    startDate: formatUtcDate(addUtcDays(day, -1)),
+    endDate: formatUtcDate(addUtcDays(day, -1)),
+  };
+}
+
+function getPreviousRange(range) {
+  const start = parseDateString(range.startDate);
+  const end = parseDateString(range.endDate);
+  const startDate = new Date(Date.UTC(start.year, start.month - 1, start.day));
+  const endDate = new Date(Date.UTC(end.year, end.month - 1, end.day));
+  const days = Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1;
+
+  return {
+    startDate: formatUtcDate(addUtcDays(startDate, -days)),
+    endDate: formatUtcDate(addUtcDays(endDate, -days)),
+  };
+}
+
 function parseDateString(value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) {
@@ -267,6 +295,11 @@ async function fetchSub2ApiUsageStats(startDate, endDate) {
 }
 
 async function fetchTopUserTokenConsumers(startDate, endDate, limit) {
+  const users = await fetchUserTokenConsumers(startDate, endDate, limit);
+  return withUserNicknames(users);
+}
+
+async function fetchUserTokenConsumers(startDate, endDate, limit) {
   const url = new URL(`${config.sub2apiBaseUrl}/api/v1/admin/dashboard/user-breakdown`);
   url.searchParams.set("start_date", startDate);
   url.searchParams.set("end_date", endDate);
@@ -298,7 +331,18 @@ async function fetchTopUserTokenConsumers(startDate, endDate, limit) {
     .sort((a, b) => b.totalTokens - a.totalTokens)
     .slice(0, limit);
 
-  return withUserNicknames(topUsers);
+  return topUsers;
+}
+
+async function fetchUserBreakdownSummary(startDate, endDate) {
+  const users = await fetchUserTokenConsumers(startDate, endDate, 200);
+  return users.reduce(
+    (summary, user) => ({
+      totalActualCost: summary.totalActualCost + user.actualCost,
+      totalTokens: summary.totalTokens + user.totalTokens,
+    }),
+    { totalActualCost: 0, totalTokens: 0 },
+  );
 }
 
 async function withUserNicknames(users) {
@@ -406,30 +450,31 @@ async function readJsonResponse(response, label) {
   }
 }
 
-function buildReportText(stats, reportDate, cumulative, dailyTopUsers) {
+function buildReportText(stats, reportDate, cumulative, dailyTopUsers, previousDayStats) {
   const requests = toNumber(stats.total_requests);
   const inputTokens = toNumber(stats.total_input_tokens);
   const outputTokens = toNumber(stats.total_output_tokens);
   const cacheTokens = toNumber(stats.total_cache_tokens);
   const totalTokens = toNumber(stats.total_tokens);
   const actualCost = toNumber(stats.total_actual_cost);
+  const previousActualCost = toNumber(previousDayStats.total_actual_cost);
   const averageDurationMs = toNumber(stats.average_duration_ms);
   const title = buildReportTitle(reportDate);
 
   return [
-    `### ${title}`,
+    `### 📊 ${title}`,
     "",
     `统计日期：${reportDate}`,
     "",
-    `- 使用额度：${formatUsd(actualCost)}`,
-    `- 平均耗时：${formatDuration(averageDurationMs)}`,
-    `- 请求数：${formatCompactNumber(requests, "次")}`,
-    `- 输入 Tokens：${formatCompactNumber(inputTokens, "tokens")}`,
-    `- 输出 Tokens：${formatCompactNumber(outputTokens, "tokens")}`,
-    `- 缓存 Tokens：${formatCompactNumber(cacheTokens, "tokens")}`,
-    `- 总 Tokens：${formatCompactNumber(totalTokens, "tokens")}`,
+    `- 💰 使用金额：${formatUsd(actualCost)}（较前日 ${formatChange(actualCost, previousActualCost)}）`,
+    `- ⏱️ 平均耗时：${formatDuration(averageDurationMs)}`,
+    `- 🔁 请求数：${formatCompactNumber(requests, "次")}`,
+    `- 📥 输入 Tokens：${formatCompactNumber(inputTokens, "tokens")}`,
+    `- 📤 输出 Tokens：${formatCompactNumber(outputTokens, "tokens")}`,
+    `- 🧊 缓存 Tokens：${formatCompactNumber(cacheTokens, "tokens")}`,
+    `- 🧮 总 Tokens：${formatCompactNumber(totalTokens, "tokens")}`,
     ``,
-    `**昨日 Token 消耗 Top 3**`,
+    `**🏅 昨日 Token 消耗 Top 3**`,
     ...formatTopUsers(dailyTopUsers),
 
     ``,
@@ -441,33 +486,47 @@ function buildReportText(stats, reportDate, cumulative, dailyTopUsers) {
 }
 
 async function buildWeeklyRankingMessage(weekRange) {
+  const previousWeekRange = getPreviousRange(weekRange);
+  const weeklySummary = await fetchUserBreakdownSummary(weekRange.startDate, weekRange.endDate);
+  const previousWeeklySummary = await fetchUserBreakdownSummary(
+    previousWeekRange.startDate,
+    previousWeekRange.endDate,
+  );
   const weeklyTopUsers = await fetchTopUserTokenConsumers(weekRange.startDate, weekRange.endDate, 5);
-  const text = buildWeeklyRankingText(weekRange, weeklyTopUsers);
+  const text = buildWeeklyRankingText(
+    weekRange,
+    weeklyTopUsers,
+    weeklySummary,
+    previousWeeklySummary,
+  );
   return buildDingtalkMessage(text, buildWeeklyRankingTitle(weekRange));
 }
 
-function buildWeeklyRankingText(weekRange, weeklyTopUsers) {
+function buildWeeklyRankingText(weekRange, weeklyTopUsers, weeklySummary, previousWeeklySummary) {
   const title = buildWeeklyRankingTitle(weekRange);
+  const weeklyActualCost = toNumber(weeklySummary.totalActualCost);
+  const previousWeeklyActualCost = toNumber(previousWeeklySummary.totalActualCost);
   const champion = weeklyTopUsers[0];
   const championLine = champion
-    ? `${formatUserLabel(champion)} 获得了上周的 Token 消耗冠军，共消耗 ${formatCompactNumber(champion.totalTokens, "tokens")}。`
+    ? `🏆 ${formatUserLabel(champion)} 获得了上周的 Token 消耗冠军，共消耗 ${formatCompactNumber(champion.totalTokens, "tokens")}，${formatUsd(champion.actualCost)}。`
     : "上周暂无用户消耗数据。";
 
   return [
-    `### ${title}`,
+    `### 🏆 ${title}`,
     "",
     `统计周期：${weekRange.startDate} 至 ${weekRange.endDate}`,
+    `- 💰 上周总金额：${formatUsd(weeklyActualCost)}（环比 ${formatChange(weeklyActualCost, previousWeeklyActualCost)}）`,
     "",
     championLine,
     "",
-    `**上周 Token 消耗 Top 5**`,
+    `**🏅 上周 Token 消耗 Top 5**`,
     ...formatTopUsers(weeklyTopUsers),
     "",
   ].join("\n");
 }
 
 function buildWeeklyRankingTitle(weekRange) {
-  return `Sub2API 上周 Token 消耗排行（${weekRange.startDate} 至 ${weekRange.endDate}）`;
+  return `上周 Token 消耗排行`;
 }
 
 function formatTopUsers(topUsers) {
@@ -477,7 +536,7 @@ function formatTopUsers(topUsers) {
 
   return topUsers.map((user, index) => {
     const userLabel = formatUserLabel(user);
-    return `${index + 1}. ${userLabel}：${formatCompactNumber(user.totalTokens, "tokens")}（额度 ${formatUsd(user.actualCost)}）`;
+    return `${index + 1}. ${userLabel}：${formatCompactNumber(user.totalTokens, "tokens")}（${formatUsd(user.actualCost)}）`;
   });
 }
 
@@ -572,7 +631,7 @@ function resolveStateFilePath() {
 }
 
 function buildReportTitle(reportDate) {
-  return `${config.title}（${reportDate}）`;
+  return `${config.title}`;
 }
 
 function buildDingtalkMessage(text, title) {
@@ -620,6 +679,31 @@ function formatDuration(valueMs) {
   }
 
   return `${formatDecimal(valueMs / 1_000, 1)} s`;
+}
+
+function formatChange(current, previous) {
+  if (previous === 0) {
+    return current === 0 ? "持平" : "无前期数据";
+  }
+
+  const change = (current - previous) / previous;
+  if (Math.abs(change) < 0.0005) {
+    return "持平";
+  }
+
+  const sign = change > 0 ? "+" : "";
+  const emoji = formatChangeEmoji(change);
+  const prefix = emoji ? `${emoji} ` : "";
+  return `${prefix}${sign}${formatDecimal(change * 100, 1)}%`;
+}
+
+function formatChangeEmoji(change) {
+  if (change <= 0) {
+    return "";
+  }
+
+  const abs = Math.abs(change);
+  return abs >= 0.5 ? "🚀" : abs >= 0.2 ? "📈" : "⬆️";
 }
 
 function formatDecimal(value, digits) {

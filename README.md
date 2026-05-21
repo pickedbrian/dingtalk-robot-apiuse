@@ -61,9 +61,9 @@ GET /api/v1/admin/dashboard/user-breakdown?start_date=YYYY-MM-DD&end_date=YYYY-M
 `/api/v1/admin/user-attributes/batch` 批量查询排行用户的昵称。日报里优先展示昵称，
 查不到昵称时使用邮箱兜底，同时展示实际扣费。
 
-日报每天发送昨日 `total_tokens` Top 3。每周一会额外发送一条独立的周榜消息，按
+日报每天发送昨日 `total_tokens` Top 3，并在总金额上展示较前日环比。每周一会额外发送一条独立的周榜消息，按
 `REPORT_TIMEZONE` 计算上周自然周周一到周日，默认 `Asia/Shanghai`，统计上周
-`total_tokens` Top 5，并带上上周冠军文案。
+`total_tokens` Top 5，在上周总金额上展示较前一周环比，并带上上周冠军文案。
 
 ## 定时任务
 
