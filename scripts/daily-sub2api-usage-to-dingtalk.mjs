@@ -8,6 +8,7 @@ loadDotEnv();
 const localOutput = process.argv.includes("--local-output");
 const dryRun = process.argv.includes("--dry-run");
 const noStateWrite = process.argv.includes("--no-state-write");
+const todayDateOverride = readArgValue("--today") || readArgValue("--report-date");
 
 process.once("SIGINT", () => hardExit(130));
 process.once("SIGTERM", () => hardExit(143));
@@ -16,19 +17,30 @@ let config;
 
 try {
   config = readConfig();
-  const { startDate, endDate } = getYesterdayRange(config.timeZone);
+  const { startDate, endDate } = getYesterdayRange(config.timeZone, todayDateOverride);
+  const todayDate = endDate;
+  const previousWeekRange = getPreviousWeekRange(todayDate);
   const stats = await fetchSub2ApiUsageStats(startDate, endDate);
-  const topUsers = await fetchTopUserTokenConsumers(startDate);
+  const dailyTopUsers = await fetchTopUserTokenConsumers(startDate, startDate, 3);
   const cumulative = updateCumulativeActualCost(startDate, toNumber(stats.total_actual_cost));
-  const reportText = buildReportText(stats, startDate, cumulative, topUsers);
+  const reportText = buildReportText(stats, startDate, cumulative, dailyTopUsers);
   const message = buildDingtalkMessage(reportText, buildReportTitle(startDate));
+  const weeklyMessage = isMonday(todayDate)
+    ? await buildWeeklyRankingMessage(previousWeekRange)
+    : null;
 
   if (localOutput) {
     await writeStdout(`${reportText}\n`);
+    if (weeklyMessage) {
+      await writeStdout(`\n${weeklyMessage.markdown.text}\n`);
+    }
   } else if (dryRun) {
-    await writeStdout(`${JSON.stringify(message, null, 2)}\n`);
+    await writeStdout(`${JSON.stringify(compactMessages([message, weeklyMessage]), null, 2)}\n`);
   } else {
     await sendDingtalkMessage(message);
+    if (weeklyMessage) {
+      await sendDingtalkMessage(weeklyMessage);
+    }
     await writeStdout(`Sent Sub2API usage report for ${startDate}.\n`);
   }
   hardExit(0);
@@ -133,7 +145,22 @@ function parseEnvNumber(name, defaultValue) {
   return value;
 }
 
-function getYesterdayRange(timeZone) {
+function readArgValue(name) {
+  const prefix = `${name}=`;
+  const arg = process.argv.find((value) => value.startsWith(prefix));
+  return arg ? arg.slice(prefix.length) : "";
+}
+
+function getYesterdayRange(timeZone, todayDate) {
+  if (todayDate) {
+    const today = parseDateString(todayDate);
+    const todayUtc = new Date(Date.UTC(today.year, today.month - 1, today.day));
+    return {
+      startDate: formatUtcDate(addUtcDays(todayUtc, -1)),
+      endDate: formatUtcDate(todayUtc),
+    };
+  }
+
   const todayNoonUtc = dateAtTimeZoneNoon(new Date(), timeZone);
   const yesterdayNoonUtc = new Date(todayNoonUtc.getTime() - 24 * 60 * 60 * 1000);
 
@@ -141,6 +168,45 @@ function getYesterdayRange(timeZone) {
     startDate: formatDateInTimeZone(yesterdayNoonUtc, timeZone),
     endDate: formatDateInTimeZone(todayNoonUtc, timeZone),
   };
+}
+
+function getPreviousWeekRange(todayDate) {
+  const date = parseDateString(todayDate);
+  const today = new Date(Date.UTC(date.year, date.month - 1, date.day));
+  const dayOfWeek = today.getUTCDay();
+  const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const thisWeekMonday = addUtcDays(today, -daysSinceMonday);
+
+  return {
+    startDate: formatUtcDate(addUtcDays(thisWeekMonday, -7)),
+    endDate: formatUtcDate(addUtcDays(thisWeekMonday, -1)),
+  };
+}
+
+function parseDateString(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    throw new Error(`Invalid date: ${value}`);
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function formatUtcDate(date) {
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+}
+
+function addUtcDays(date, days) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + days));
+}
+
+function isMonday(dateValue) {
+  const date = parseDateString(dateValue);
+  return new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay() === 1;
 }
 
 function dateAtTimeZoneNoon(date, timeZone) {
@@ -200,12 +266,12 @@ async function fetchSub2ApiUsageStats(startDate, endDate) {
   return body.data || {};
 }
 
-async function fetchTopUserTokenConsumers(reportDate) {
+async function fetchTopUserTokenConsumers(startDate, endDate, limit) {
   const url = new URL(`${config.sub2apiBaseUrl}/api/v1/admin/dashboard/user-breakdown`);
-  url.searchParams.set("start_date", reportDate);
-  url.searchParams.set("end_date", reportDate);
+  url.searchParams.set("start_date", startDate);
+  url.searchParams.set("end_date", endDate);
   url.searchParams.set("timezone", config.timeZone);
-  url.searchParams.set("limit", "3");
+  url.searchParams.set("limit", String(limit));
 
   const response = await fetch(url, {
     headers: buildSub2ApiAuthHeaders(),
@@ -230,7 +296,7 @@ async function fetchTopUserTokenConsumers(reportDate) {
     }))
     .filter((user) => user.totalTokens > 0)
     .sort((a, b) => b.totalTokens - a.totalTokens)
-    .slice(0, 3);
+    .slice(0, limit);
 
   return withUserNicknames(topUsers);
 }
@@ -340,7 +406,7 @@ async function readJsonResponse(response, label) {
   }
 }
 
-function buildReportText(stats, reportDate, cumulative, topUsers) {
+function buildReportText(stats, reportDate, cumulative, dailyTopUsers) {
   const requests = toNumber(stats.total_requests);
   const inputTokens = toNumber(stats.total_input_tokens);
   const outputTokens = toNumber(stats.total_output_tokens);
@@ -364,7 +430,7 @@ function buildReportText(stats, reportDate, cumulative, topUsers) {
     `- 总 Tokens：${formatCompactNumber(totalTokens, "tokens")}`,
     ``,
     `**昨日 Token 消耗 Top 3**`,
-    ...formatTopUsers(topUsers),
+    ...formatTopUsers(dailyTopUsers),
 
     ``,
     `------`,
@@ -372,6 +438,36 @@ function buildReportText(stats, reportDate, cumulative, topUsers) {
     `- 累计已使用：${formatUsd(cumulative.totalActualCost)}`,
     ``,
   ].join("\n");
+}
+
+async function buildWeeklyRankingMessage(weekRange) {
+  const weeklyTopUsers = await fetchTopUserTokenConsumers(weekRange.startDate, weekRange.endDate, 5);
+  const text = buildWeeklyRankingText(weekRange, weeklyTopUsers);
+  return buildDingtalkMessage(text, buildWeeklyRankingTitle(weekRange));
+}
+
+function buildWeeklyRankingText(weekRange, weeklyTopUsers) {
+  const title = buildWeeklyRankingTitle(weekRange);
+  const champion = weeklyTopUsers[0];
+  const championLine = champion
+    ? `${formatUserLabel(champion)} 获得了上周的 Token 消耗冠军，共消耗 ${formatCompactNumber(champion.totalTokens, "tokens")}。`
+    : "上周暂无用户消耗数据。";
+
+  return [
+    `### ${title}`,
+    "",
+    `统计周期：${weekRange.startDate} 至 ${weekRange.endDate}`,
+    "",
+    championLine,
+    "",
+    `**上周 Token 消耗 Top 5**`,
+    ...formatTopUsers(weeklyTopUsers),
+    "",
+  ].join("\n");
+}
+
+function buildWeeklyRankingTitle(weekRange) {
+  return `Sub2API 上周 Token 消耗排行（${weekRange.startDate} 至 ${weekRange.endDate}）`;
 }
 
 function formatTopUsers(topUsers) {
@@ -487,6 +583,10 @@ function buildDingtalkMessage(text, title) {
       text,
     },
   };
+}
+
+function compactMessages(messages) {
+  return messages.filter(Boolean);
 }
 
 function toNumber(value) {

@@ -28,8 +28,10 @@ npm run notify:usage
 ```
 
 - `npm run report:usage` / `--local-output`：只需要 Sub2API 配置，查询后在本地终端打印报告，不需要钉钉配置，也不会发送钉钉消息。
-- `--dry-run`：查询 Sub2API，但不发送钉钉消息，只打印将要发送给钉钉的 JSON payload。这个模式仍会校验 `DINGTALK_WEBHOOK`。
+- `--dry-run`：查询 Sub2API，但不发送钉钉消息，只打印将要发送给钉钉的 JSON payload。周一会包含日报和周榜两条消息。这个模式仍会校验 `DINGTALK_WEBHOOK`。
 - `--no-state-write`：只预览累计产出，不写入累计状态文件。
+- `--today=YYYY-MM-DD`：测试用，模拟脚本运行当天的日期。比如 `--today=2026-05-25` 会查询
+  `2026-05-24` 日报，并触发上周 `2026-05-18` 至 `2026-05-24` 周榜。
 
 ## 累计产出
 
@@ -56,8 +58,12 @@ GET /api/v1/admin/dashboard/user-breakdown?start_date=YYYY-MM-DD&end_date=YYYY-M
 ```
 
 脚本会再通过 `/api/v1/admin/user-attributes` 找到 `nickname` 属性，并用
-`/api/v1/admin/user-attributes/batch` 批量查询 Top 3 用户的昵称。日报里优先展示昵称，
+`/api/v1/admin/user-attributes/batch` 批量查询排行用户的昵称。日报里优先展示昵称，
 查不到昵称时使用邮箱兜底，同时展示实际扣费。
+
+日报每天发送昨日 `total_tokens` Top 3。每周一会额外发送一条独立的周榜消息，按
+`REPORT_TIMEZONE` 计算上周自然周周一到周日，默认 `Asia/Shanghai`，统计上周
+`total_tokens` Top 5，并带上上周冠军文案。
 
 ## 定时任务
 
