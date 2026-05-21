@@ -18,8 +18,9 @@ try {
   config = readConfig();
   const { startDate, endDate } = getYesterdayRange(config.timeZone);
   const stats = await fetchSub2ApiUsageStats(startDate, endDate);
+  const topUsers = await fetchTopUserTokenConsumers(startDate);
   const cumulative = updateCumulativeActualCost(startDate, toNumber(stats.total_actual_cost));
-  const reportText = buildReportText(stats, startDate, cumulative);
+  const reportText = buildReportText(stats, startDate, cumulative, topUsers);
   const message = buildDingtalkMessage(reportText, buildReportTitle(startDate));
 
   if (localOutput) {
@@ -199,6 +200,123 @@ async function fetchSub2ApiUsageStats(startDate, endDate) {
   return body.data || {};
 }
 
+async function fetchTopUserTokenConsumers(reportDate) {
+  const url = new URL(`${config.sub2apiBaseUrl}/api/v1/admin/dashboard/user-breakdown`);
+  url.searchParams.set("start_date", reportDate);
+  url.searchParams.set("end_date", reportDate);
+  url.searchParams.set("timezone", config.timeZone);
+  url.searchParams.set("limit", "3");
+
+  const response = await fetch(url, {
+    headers: buildSub2ApiAuthHeaders(),
+    signal: AbortSignal.timeout(config.requestTimeoutMs),
+  });
+
+  const body = await readJsonResponse(response, "Sub2API user breakdown");
+  if (!response.ok || body.code !== 0) {
+    throw new Error(
+      `Sub2API user breakdown request failed: HTTP ${response.status}, code=${body.code}, message=${body.message || ""}`,
+    );
+  }
+
+  const users = Array.isArray(body.data?.users) ? body.data.users : [];
+  const topUsers = users
+    .map((user) => ({
+      userId: user.user_id,
+      email: typeof user.email === "string" ? user.email : "",
+      requests: toNumber(user.requests),
+      totalTokens: toNumber(user.total_tokens),
+      actualCost: toNumber(user.actual_cost),
+    }))
+    .filter((user) => user.totalTokens > 0)
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .slice(0, 3);
+
+  return withUserNicknames(topUsers);
+}
+
+async function withUserNicknames(users) {
+  if (users.length === 0) {
+    return users;
+  }
+
+  const nicknames = await fetchUserNicknames(users.map((user) => user.userId));
+  if (nicknames.size === 0) {
+    return users;
+  }
+
+  return users.map((user) => ({
+    ...user,
+    nickname: nicknames.get(String(user.userId)) || "",
+  }));
+}
+
+async function fetchUserNicknames(userIds) {
+  try {
+    const nicknameAttributeId = await fetchNicknameAttributeId();
+    if (nicknameAttributeId == null) {
+      return new Map();
+    }
+
+    const attributes = await fetchBatchUserAttributes(userIds);
+    const nicknames = new Map();
+    for (const [userId, values] of Object.entries(attributes)) {
+      const nickname = values?.[String(nicknameAttributeId)];
+      if (typeof nickname === "string" && nickname.trim()) {
+        nicknames.set(userId, nickname.trim());
+      }
+    }
+    return nicknames;
+  } catch {
+    return new Map();
+  }
+}
+
+async function fetchNicknameAttributeId() {
+  const url = new URL(`${config.sub2apiBaseUrl}/api/v1/admin/user-attributes`);
+  url.searchParams.set("enabled", "true");
+  url.searchParams.set("timezone", config.timeZone);
+
+  const response = await fetch(url, {
+    headers: buildSub2ApiAuthHeaders(),
+    signal: AbortSignal.timeout(config.requestTimeoutMs),
+  });
+
+  const body = await readJsonResponse(response, "Sub2API user attributes");
+  if (!response.ok || body.code !== 0) {
+    throw new Error(
+      `Sub2API user attributes request failed: HTTP ${response.status}, code=${body.code}, message=${body.message || ""}`,
+    );
+  }
+
+  const attributes = Array.isArray(body.data) ? body.data : [];
+  return attributes.find((attribute) => attribute?.key === "nickname")?.id ?? null;
+}
+
+async function fetchBatchUserAttributes(userIds) {
+  const url = new URL(`${config.sub2apiBaseUrl}/api/v1/admin/user-attributes/batch`);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      ...buildSub2ApiAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ user_ids: userIds }),
+    signal: AbortSignal.timeout(config.requestTimeoutMs),
+  });
+
+  const body = await readJsonResponse(response, "Sub2API batch user attributes");
+  if (!response.ok || body.code !== 0) {
+    throw new Error(
+      `Sub2API batch user attributes request failed: HTTP ${response.status}, code=${body.code}, message=${body.message || ""}`,
+    );
+  }
+
+  return body.data?.attributes && typeof body.data.attributes === "object"
+    ? body.data.attributes
+    : {};
+}
+
 function buildSub2ApiAuthHeaders() {
   const headers = {
     Accept: "application/json",
@@ -222,7 +340,7 @@ async function readJsonResponse(response, label) {
   }
 }
 
-function buildReportText(stats, reportDate, cumulative) {
+function buildReportText(stats, reportDate, cumulative, topUsers) {
   const requests = toNumber(stats.total_requests);
   const inputTokens = toNumber(stats.total_input_tokens);
   const outputTokens = toNumber(stats.total_output_tokens);
@@ -244,6 +362,9 @@ function buildReportText(stats, reportDate, cumulative) {
     `- 输出 Tokens：${formatCompactNumber(outputTokens, "tokens")}`,
     `- 缓存 Tokens：${formatCompactNumber(cacheTokens, "tokens")}`,
     `- 总 Tokens：${formatCompactNumber(totalTokens, "tokens")}`,
+    ``,
+    `**昨日 Token 消耗 Top 3**`,
+    ...formatTopUsers(topUsers),
 
     ``,
     `------`,
@@ -251,6 +372,33 @@ function buildReportText(stats, reportDate, cumulative) {
     `- 累计已使用：${formatUsd(cumulative.totalActualCost)}`,
     ``,
   ].join("\n");
+}
+
+function formatTopUsers(topUsers) {
+  if (!Array.isArray(topUsers) || topUsers.length === 0) {
+    return ["- 暂无用户消耗数据"];
+  }
+
+  return topUsers.map((user, index) => {
+    const userLabel = formatUserLabel(user);
+    return `${index + 1}. ${userLabel}：${formatCompactNumber(user.totalTokens, "tokens")}（额度 ${formatUsd(user.actualCost)}）`;
+  });
+}
+
+function formatUserLabel(user) {
+  if (user.nickname) {
+    return user.nickname;
+  }
+
+  if (user.email) {
+    return user.email;
+  }
+
+  if (user.userId != null && user.userId !== "") {
+    return `用户 #${user.userId}`;
+  }
+
+  return "未知用户";
 }
 
 function updateCumulativeActualCost(reportDate, actualCost) {

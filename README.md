@@ -47,6 +47,18 @@ CUMULATIVE_BASE_ACTUAL_COST + 每日 total_actual_cost 汇总
 
 每日数据按日期保存在 `data/cumulative-actual-cost.json`。同一天重复执行不会重复累加，而是覆盖当天的 `total_actual_cost` 后重新计算总额。
 
+## 用户 Token 排行
+
+管理员模式下，脚本会额外调用：
+
+```text
+GET /api/v1/admin/dashboard/user-breakdown?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&limit=3&timezone=Asia/Shanghai
+```
+
+脚本会再通过 `/api/v1/admin/user-attributes` 找到 `nickname` 属性，并用
+`/api/v1/admin/user-attributes/batch` 批量查询 Top 3 用户的昵称。日报里优先展示昵称，
+查不到昵称时使用邮箱兜底，同时展示实际扣费。
+
 ## 定时任务
 
 Linux/macOS 使用 crontab：
