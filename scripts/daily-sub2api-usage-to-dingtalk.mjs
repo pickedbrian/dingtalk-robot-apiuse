@@ -9,6 +9,7 @@ const localOutput = process.argv.includes("--local-output");
 const dryRun = process.argv.includes("--dry-run");
 const noStateWrite = process.argv.includes("--no-state-write");
 const todayDateOverride = readArgValue("--today") || readArgValue("--report-date");
+const userBreakdownCandidateLimit = 200;
 
 process.once("SIGINT", () => hardExit(130));
 process.once("SIGTERM", () => hardExit(143));
@@ -26,7 +27,7 @@ try {
     previousDayRange.startDate,
     previousDayRange.endDate,
   );
-  const dailyTopUsers = await fetchTopUserTokenConsumers(startDate, startDate, 3);
+  const dailyTopUsers = await fetchTopUserTokenConsumers(startDate, startDate, 5);
   const cumulative = updateCumulativeActualCost(startDate, toNumber(stats.total_actual_cost));
   const reportText = buildReportText(stats, startDate, cumulative, dailyTopUsers, previousDayStats);
   const message = buildDingtalkMessage(reportText, buildReportTitle(startDate));
@@ -304,7 +305,7 @@ async function fetchUserTokenConsumers(startDate, endDate, limit) {
   url.searchParams.set("start_date", startDate);
   url.searchParams.set("end_date", endDate);
   url.searchParams.set("timezone", config.timeZone);
-  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("limit", String(Math.max(limit, userBreakdownCandidateLimit)));
 
   const response = await fetch(url, {
     headers: buildSub2ApiAuthHeaders(),
@@ -474,7 +475,7 @@ function buildReportText(stats, reportDate, cumulative, dailyTopUsers, previousD
     `- 🧊 缓存 Tokens：${formatCompactNumber(cacheTokens, "tokens")}`,
     `- 🧮 总 Tokens：${formatCompactNumber(totalTokens, "tokens")}`,
     ``,
-    `**🏅 昨日 Token 消耗 Top 3**`,
+    `**🏅 昨日 Token 消耗 Top 5**`,
     ...formatTopUsers(dailyTopUsers),
 
     ``,
