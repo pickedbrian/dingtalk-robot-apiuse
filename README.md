@@ -63,7 +63,7 @@ GET /api/v1/admin/dashboard/user-breakdown?start_date=YYYY-MM-DD&end_date=YYYY-M
 
 日报每天发送昨日 `total_tokens` Top 3，并在总金额上展示较前日环比。每周一会额外发送一条独立的周榜消息，按
 `REPORT_TIMEZONE` 计算上周自然周周一到周日，默认 `Asia/Shanghai`，统计上周
-`total_tokens` Top 5，在上周总金额上展示较前一周环比，并带上上周冠军文案。
+`total_tokens` Top 10，在上周总金额上展示较前一周环比，并带上上周冠军文案。
 
 ## 定时任务
 

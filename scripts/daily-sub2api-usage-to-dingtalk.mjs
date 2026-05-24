@@ -10,6 +10,7 @@ const dryRun = process.argv.includes("--dry-run");
 const noStateWrite = process.argv.includes("--no-state-write");
 const todayDateOverride = readArgValue("--today") || readArgValue("--report-date");
 const userBreakdownCandidateLimit = 200;
+const excludedRankingEmails = new Set(["sinomisadmin@sub2api.local"]);
 
 process.once("SIGINT", () => hardExit(130));
 process.once("SIGTERM", () => hardExit(143));
@@ -328,6 +329,7 @@ async function fetchUserTokenConsumers(startDate, endDate, limit) {
       totalTokens: toNumber(user.total_tokens),
       actualCost: toNumber(user.actual_cost),
     }))
+    .filter((user) => !excludedRankingEmails.has(user.email.toLowerCase()))
     .filter((user) => user.totalTokens > 0)
     .sort((a, b) => b.totalTokens - a.totalTokens)
     .slice(0, limit);
@@ -493,7 +495,7 @@ async function buildWeeklyRankingMessage(weekRange) {
     previousWeekRange.startDate,
     previousWeekRange.endDate,
   );
-  const weeklyTopUsers = await fetchTopUserTokenConsumers(weekRange.startDate, weekRange.endDate, 5);
+  const weeklyTopUsers = await fetchTopUserTokenConsumers(weekRange.startDate, weekRange.endDate, 10);
   const text = buildWeeklyRankingText(
     weekRange,
     weeklyTopUsers,
@@ -520,7 +522,7 @@ function buildWeeklyRankingText(weekRange, weeklyTopUsers, weeklySummary, previo
     "",
     championLine,
     "",
-    `**🏅 上周 Token 消耗 Top 5**`,
+    `**🏅 上周 Token 消耗 Top 10**`,
     ...formatTopUsers(weeklyTopUsers),
     "",
   ].join("\n");
